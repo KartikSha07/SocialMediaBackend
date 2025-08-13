@@ -17,7 +17,7 @@ dotenv.config({ path: "./.env" });
 const app = express();
 const server = http.createServer(app);
 const allowedOrigins = [
-  "https://your-frontend-domain.com", // production frontend
+  "social-media-frontend-umber.vercel.app", // production frontend
   "http://localhost:3000"             // local React dev server
 ];
 
