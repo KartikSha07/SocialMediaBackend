@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "name": "Social-Media",
+  "builds": [
+    { "src": "server.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "/server.js" }
+  ],
+  "env": {
+    "MONGO_URI": "mongodb+srv://krtksharma7:6SV2XaUVLnJsxEFW@general.ltccm0o.mongodb.net/Authentication?retryWrites=true&w=majority&appName=General",
+    "JWT_SECRET": "c80ac294a8e2b30b59092d40acd40b68d52b9254ebad6090478fc74b71ed9a20b16bf70b6bf3016ae2f930b263ef7a83e886727af0490d2f4e4093cc8a0ba4ea",
+    "REFRESH_KEY": "d7cba0d5925cc408971695f87a6191a2b9b72d9de27b426e881efc20688af51ec0ea51e425e5c831fe04553ebb2d79ca3a378b1e03f8a2dbe14c10597dd69938",
+    "CLOUDINARY_CLOUD_NAME": "div0zijcq",
+    "CLOUDINARY_API_KEY": "891873657766531",
+    "CLOUDINARY_API_SECRET": "iunLei0lfHnc8bA-PT6ayoHC50k"
+  }
+}
