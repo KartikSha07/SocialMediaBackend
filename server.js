@@ -9,13 +9,16 @@ const http = require("http");
 const socketIo = require("socket.io");
 const WatchRoom = require("./models/watchRoomModel");
 const Message = require("./models/messageModel");
-
 const { success, failure } = require("./utils/responseStatus");
 
 dotenv.config({ path: "./.env" });
 
 const app = express();
 const server = http.createServer(app);
+
+/* -------------------------
+   ✅ CORS FIX — Full Protocols
+-------------------------- */
 const allowedOrigins = [
   "https://social-media-frontend-umber.vercel.app",
   "social-media-frontend-umber.vercel.app", 
@@ -23,26 +26,23 @@ const allowedOrigins = [
 ];
 
 
-// Attach Socket.IO
-// CORS middleware
 const corsOptions = {
   origin: function (origin, callback) {
-    // allow requests with no origin (like mobile apps, curl, Postman)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (!origin) return callback(null, true); // Postman / curl
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.warn(`Blocked by CORS: ${origin}`);
+      console.warn(`❌ Blocked by CORS: ${origin}`);
       callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true
 };
-
 app.use(cors(corsOptions));
 
-// Socket.IO config with same allowed origins
+/* -------------------------
+   ✅ Socket.IO Setup
+-------------------------- */
 const io = socketIo(server, {
   cors: {
     origin: allowedOrigins,
@@ -52,40 +52,57 @@ const io = socketIo(server, {
 });
 app.set("io", io);
 
-// Cloudinary config
+/* -------------------------
+   ✅ Cloudinary Setup
+-------------------------- */
 cloudinary.config({
   secure: true,
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
-
 
 app.use(express.json({ limit: "10mb" }));
 app.use(morgan("common"));
 app.use(cookie());
 
-// Routes
-const authRoute = require("./routes/authRoutes");
-const postRoute = require("./routes/postRoutes");
-const userRoute = require("./routes/userRoutes");
-const messageRoute = require("./routes/messageRoutes");
-const watchPartyRoute = require("./routes/watchPartyRoutes");
-const youtubeRoutes = require("./routes/youtubeRoutes");
+/* -------------------------
+   Routes
+-------------------------- */
+app.use("/watchParty", require("./routes/watchPartyRoutes"));
+app.use("/youtube", require("./routes/youtubeRoutes"));
+app.use("/auth", require("./routes/authRoutes"));
+app.use("/posts", require("./routes/postRoutes"));
+app.use("/users", require("./routes/userRoutes"));
+app.use("/messages", require("./routes/messageRoutes"));
 
-app.use("/watchParty", watchPartyRoute);
-app.use("/youtube", youtubeRoutes);
-app.use("/auth", authRoute);
-app.use("/posts", postRoute);
-app.use("/users", userRoute);
-app.use("/messages", messageRoute);
-
-// Online users tracking
+/* -------------------------
+   Online users map
+-------------------------- */
 const onlineUsers = new Map();
 
-// Socket.IO events
+/* -------------------------
+   Smooth Sync Helpers
+-------------------------- */
+function throttle(fn, wait) {
+  let lastTime = 0;
+  return function (...args) {
+    const now = Date.now();
+    if (now - lastTime >= wait) {
+      fn.apply(this, args);
+      lastTime = now;
+    }
+  };
+}
+
+// Store last broadcast time by room to prevent micro-jumps
+const lastTimes = {};
+
+/* -------------------------
+   Socket.IO events
+-------------------------- */
 io.on("connection", (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  console.log(`✅ Client connected: ${socket.id}`);
 
   socket.on("registerUser", (uid) => {
     onlineUsers.set(uid.toString(), socket.id);
@@ -103,14 +120,37 @@ io.on("connection", (socket) => {
     socket.emit("watchRoomState", room);
   });
 
-  socket.on("watchPlay", ({ roomId, currentTime }) => {
-    socket.to(roomId).emit("watchPlay", { currentTime });
-  });
+  /* -------------------------
+     Smooth Sync for watchPlay
+  -------------------------- */
+  socket.on(
+    "watchPlay",
+    throttle(({ roomId, currentTime }) => {
+      const diff = Math.abs((lastTimes[roomId]?.play || 0) - currentTime);
+      if (diff > 0.4) {
+        lastTimes[roomId] = { ...(lastTimes[roomId] || {}), play: currentTime };
+        socket.to(roomId).emit("watchPlay", { currentTime });
+      }
+    }, 700)
+  );
 
-  socket.on("watchPause", ({ roomId, currentTime }) => {
-    socket.to(roomId).emit("watchPause", { currentTime });
-  });
+  /* -------------------------
+     Smooth Sync for watchPause
+  -------------------------- */
+  socket.on(
+    "watchPause",
+    throttle(({ roomId, currentTime }) => {
+      const diff = Math.abs((lastTimes[roomId]?.pause || 0) - currentTime);
+      if (diff > 0.4) {
+        lastTimes[roomId] = { ...(lastTimes[roomId] || {}), pause: currentTime };
+        socket.to(roomId).emit("watchPause", { currentTime });
+      }
+    }, 700)
+  );
 
+  /* -------------------------
+     Queue management
+  -------------------------- */
   socket.on("addVideoToQueue", async ({ roomId, videoId, title }) => {
     if (!videoId || !title) return;
     const room = await WatchRoom.findById(roomId);
@@ -124,7 +164,7 @@ io.on("connection", (socket) => {
     await room.save();
     io.to(roomId).emit("queueUpdated", {
       currentVideo: room.currentVideo,
-      videoQueue: room.videoQueue,
+      videoQueue: room.videoQueue
     });
   });
 
@@ -137,22 +177,26 @@ io.on("connection", (socket) => {
     await room.save();
     io.to(roomId).emit("videoChanged", {
       currentVideo: room.currentVideo,
-      videoQueue: room.videoQueue,
+      videoQueue: room.videoQueue
     });
   });
+
   socket.on("removeFromQueue", async ({ roomId, index }) => {
     const room = await WatchRoom.findById(roomId);
     if (!room) return;
-
     if (index >= 0 && index < room.videoQueue.length) {
       room.videoQueue.splice(index, 1);
       await room.save();
       io.to(roomId).emit("queueUpdated", {
         currentVideo: room.currentVideo,
-        videoQueue: room.videoQueue,
+        videoQueue: room.videoQueue
       });
     }
   });
+
+  /* -------------------------
+     Chat in watch party
+  -------------------------- */
   socket.on("watchChatMessage", async ({ roomId, userId, message }) => {
     const room = await WatchRoom.findById(roomId);
     if (!room) return;
@@ -163,80 +207,60 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("watchChatMessage", lastMsg);
   });
 
-  socket.on("leaveWatchRoom", ({ roomId }) => socket.leave(roomId));
+  /* -------------------------
+     Engagement in posts
+  -------------------------- */
+  socket.on("joinPost", (postId) => socket.join(postId));
+  socket.on("leavePost", (postId) => socket.leave(postId));
 
-  // Post room join/leave
-  socket.on("joinPost", (postId) => {
-    socket.join(postId);
-    console.log(`Socket ${socket.id} joined post room: ${postId}`);
-  });
-  socket.on("leavePost", (postId) => {
-    socket.leave(postId);
-    console.log(`Socket ${socket.id} left post room: ${postId}`);
-  });
-
-  // Track online users
+  /* -------------------------
+     Track active users
+  -------------------------- */
   socket.on("userConnected", (userId) => {
     onlineUsers.set(userId, socket.id);
-    console.log(`User ${userId} connected`);
   });
 
-  // Private message with support for text, images, GIFs
+  /* -------------------------
+     Private messages
+  -------------------------- */
   socket.on("privateMessage", async (data) => {
-    const {
-      toUserId,
-      fromUserId,
-      message,
-      imageUrl,
-      gifUrl,
-      messageId,
-      timestamp,
-    } = data;
-    if (!fromUserId || !toUserId || (!message && !imageUrl && !gifUrl)) {
-      console.error("Invalid privateMessage payload:", data);
-      return;
-    }
-
+    const { toUserId, fromUserId, message, imageUrl, gifUrl } = data;
+    if (!fromUserId || !toUserId || (!message && !imageUrl && !gifUrl)) return;
     try {
       const newMsg = new Message({
         from: fromUserId,
         to: toUserId,
         message,
         imageUrl,
-        gifUrl,
+        gifUrl
       });
       await newMsg.save();
 
-      // Fetch sender details
       const sender = await require("./models/userModel")
         .findById(fromUserId)
         .select("name avatar");
 
       const msgPayload = {
         fromUserId,
-        fromUser: sender, // include sender object
+        fromUser: sender,
         message,
         imageUrl,
         gifUrl,
         messageId: newMsg._id,
         timestamp: newMsg.createdAt,
-        read: false,
+        read: false
       };
 
-      // Send to recipient if online
       const recipientSocketId = onlineUsers.get(toUserId.toString());
       if (recipientSocketId) {
         io.to(recipientSocketId).emit("privateMessage", msgPayload);
       }
-
-      // Echo back to sender with read status true
       io.to(socket.id).emit("privateMessage", { ...msgPayload, read: true });
     } catch (err) {
-      console.error("Error saving chat message:", err.message);
+      console.error("❌ Error saving chat message:", err.message);
     }
   });
 
-  // Typing indicators
   socket.on("typing", ({ toUserId, fromUserId, name }) => {
     const recipientSocketId = onlineUsers.get(toUserId.toString());
     if (recipientSocketId) {
@@ -251,7 +275,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Read receipts
   socket.on("messageRead", ({ toUserId, fromUserId, messageId }) => {
     const recipientSocketId = onlineUsers.get(toUserId);
     if (recipientSocketId) {
@@ -259,38 +282,39 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Disconnect
   socket.on("disconnect", () => {
-    console.log(`Socket disconnected: ${socket.id}`);
     for (const [userId, sockId] of onlineUsers.entries()) {
       if (sockId === socket.id) {
         onlineUsers.delete(userId);
-        console.log(`User ${userId} went offline`);
         break;
       }
     }
   });
 });
 
-// Optional REST endpoint for image uploads from chat
+/* -------------------------
+   Chat Image Upload
+-------------------------- */
 app.post("/messages/uploadImage", async (req, res) => {
   try {
-    if (!req.body.image)
+    if (!req.body.image) {
       return res.status(400).json(failure(400, "No image provided"));
+    }
 
     const uploaded = await cloudinary.uploader.upload(req.body.image, {
-      folder: "chatImages",
+      folder: "chatImages"
     });
     res.json(success(200, { url: uploaded.secure_url }));
   } catch (err) {
-    console.error("Image upload failed", err);
     res.status(500).json(failure(500, "Image upload failed"));
   }
 });
 
-// Start server
+/* -------------------------
+   Start Server
+-------------------------- */
 const PORT = process.env.PORT || 5000;
 dbconnect();
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
